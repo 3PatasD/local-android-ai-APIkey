@@ -31,18 +31,11 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Create gradle.properties for stable repositories
+      - name: Configure Gradle for CI
         run: |
-          cat >> gradle.properties << EOF
-          org.gradle.jvmargs=-Xmx4096m -XX:MetaspaceSize=256m -XX:MaxMetaspaceSize=512m
-          org.gradle.parallel=true
-          org.gradle.caching=true
-          org.gradle.workers.max=4
-          android.useAndroidX=true
-          android.enableJetifier=true
-          systemProp.http.proxyHost=
-          systemProp.http.proxyPort=
-          EOF
+          echo "org.gradle.jvmargs=-Xmx4096m" >> gradle.properties
+          echo "org.gradle.caching=true" >> gradle.properties
+          echo "org.gradle.parallel=true" >> gradle.properties
 
       - name: Build with Gradle (Attempt 1)
         id: build1
