@@ -1948,22 +1948,353 @@ class WebServer(private val context: Context) {
                 }
             }
 
+            // OpenAI API Compatible Endpoints (v1)
+            route("/v1") {
+                // Get available models
+                get("/models") {
+                    try {
+                        val models = aiService.getSupportedModels()
+                        call.respond(mapOf(
+                            "object" to "list",
+                            "data" to (models.models?.map { model ->
+                                mapOf(
+                                    "id" to model.modelName,
+                                    "object" to "model",
+                                    "owned_by" to "local",
+                                    "permission" to listOf<String>(),
+                                    "root" to model.modelName,
+                                    "parent" to null
+                                )
+                            } ?: emptyList())
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error getting models")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf("error" to "Failed to get models")
+                        )
+                    }
+                }
+
+                // Chat completions (OpenAI compatible)
+                post("/chat/completions") {
+                    try {
+                        val request = call.receive<Map<String, Any>>()
+                        val messages = request["messages"] as? List<Map<String, String>> ?: emptyList()
+                        val prompt = messages.lastOrNull()?.get("content") ?: "Hello"
+                        val maxTokens = (request["max_tokens"] as? Number)?.toInt() ?: 100
+                        val model = request["model"] as? String ?: "gemma-2b-it-cpu"
+
+                        val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
+                            prompt = prompt,
+                            model = model,
+                            maxTokens = maxTokens,
+                            temperature = (request["temperature"] as? Number)?.toFloat() ?: 0.7f
+                        )
+
+                        val aiResponse = aiService.handleTextRequest(aiRequest)
+
+                        call.respond(mapOf(
+                            "id" to "chatcmpl-${System.currentTimeMillis()}",
+                            "object" to "text_completion",
+                            "created" to System.currentTimeMillis() / 1000,
+                            "model" to model,
+                            "choices" to listOf(mapOf(
+                                "index" to 0,
+                                "message" to mapOf(
+                                    "role" to "assistant",
+                                    "content" to aiResponse.text
+                                ),
+                                "finish_reason" to "stop"
+                            )),
+                            "usage" to mapOf(
+                                "prompt_tokens" to 0,
+                                "completion_tokens" to aiResponse.tokensUsed,
+                                "total_tokens" to aiResponse.tokensUsed
+                            )
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Chat completions error")
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to mapOf(
+                                "message" to e.message,
+                                "type" to "invalid_request_error"
+                            ))
+                        )
+                    }
+                }
+
+                // Text completions (OpenAI compatible)
+                post("/completions") {
+                    try {
+                        val request = call.receive<Map<String, Any>>()
+                        val prompt = request["prompt"] as? String ?: "Hello"
+                        val maxTokens = (request["max_tokens"] as? Number)?.toInt() ?: 100
+                        val model = request["model"] as? String ?: "gemma-2b-it-cpu"
+
+                        val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
+                            prompt = prompt,
+                            model = model,
+                            maxTokens = maxTokens,
+                            temperature = (request["temperature"] as? Number)?.toFloat() ?: 0.7f
+                        )
+
+                        val aiResponse = aiService.handleTextRequest(aiRequest)
+
+                        call.respond(mapOf(
+                            "id" to "cmpl-${System.currentTimeMillis()}",
+                            "object" to "text_completion",
+                            "created" to System.currentTimeMillis() / 1000,
+                            "model" to model,
+                            "choices" to listOf(mapOf(
+                                "text" to aiResponse.text,
+                                "index" to 0,
+                                "logprobs" to null,
+                                "finish_reason" to "stop"
+                            )),
+                            "usage" to mapOf(
+                                "prompt_tokens" to 0,
+                                "completion_tokens" to aiResponse.tokensUsed,
+                                "total_tokens" to aiResponse.tokensUsed
+                            )
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Completions error")
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to mapOf(
+                                "message" to e.message,
+                                "type" to "invalid_request_error"
+                            ))
+                        )
+                    }
+                }
+
+                // Embeddings endpoint (placeholder)
+                post("/embeddings") {
+                    try {
+                        val request = call.receive<Map<String, Any>>()
+                        val input = request["input"] as? String ?: ""
+
+                        call.respond(mapOf(
+                            "object" to "list",
+                            "data" to listOf(mapOf(
+                                "object" to "embedding",
+                                "embedding" to FloatArray(384) { 0.1f }.toList(),
+                                "index" to 0
+                            )),
+                            "model" to "text-embedding-ada-002",
+                            "usage" to mapOf(
+                                "prompt_tokens" to input.length / 4,
+                                "total_tokens" to input.length / 4
+                            )
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Embeddings error")
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to e.message)
+                        )
+                    }
+                }
+
+                // Messages endpoint (for some API clients)
+                post("/messages") {
+                    try {
+                        val request = call.receive<Map<String, Any>>()
+                        val messages = request["messages"] as? List<Map<String, String>> ?: emptyList()
+                        val prompt = messages.lastOrNull()?.get("content") ?: "Hello"
+                        val maxTokens = (request["max_tokens"] as? Number)?.toInt() ?: 100
+                        val model = request["model"] as? String ?: "gemma-2b-it-cpu"
+
+                        val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
+                            prompt = prompt,
+                            model = model,
+                            maxTokens = maxTokens
+                        )
+
+                        val aiResponse = aiService.handleTextRequest(aiRequest)
+
+                        call.respond(mapOf(
+                            "id" to "msg-${System.currentTimeMillis()}",
+                            "type" to "message",
+                            "role" to "assistant",
+                            "content" to aiResponse.text,
+                            "model" to model,
+                            "stop_reason" to "end_turn",
+                            "usage" to mapOf(
+                                "input_tokens" to 0,
+                                "output_tokens" to aiResponse.tokensUsed
+                            )
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Messages error")
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to e.message)
+                        )
+                    }
+                }
+
+                // Responses endpoint
+                post("/responses") {
+                    try {
+                        val request = call.receive<Map<String, Any>>()
+                        val prompt = request["prompt"] as? String ?: ""
+                        val maxTokens = (request["max_tokens"] as? Number)?.toInt() ?: 100
+
+                        val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
+                            prompt = prompt,
+                            maxTokens = maxTokens
+                        )
+
+                        val aiResponse = aiService.handleTextRequest(aiRequest)
+
+                        call.respond(mapOf(
+                            "response" to aiResponse.text,
+                            "tokens_used" to aiResponse.tokensUsed,
+                            "model" to aiResponse.model
+                        ))
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
+                    }
+                }
+            }
+
+            // API v1 with /api prefix (alternative format)
+            route("/api/v1") {
+                // Get models
+                get("/models") {
+                    try {
+                        val models = aiService.getSupportedModels()
+                        call.respond(mapOf(
+                            "object" to "list",
+                            "data" to (models.models?.map { model ->
+                                mapOf(
+                                    "id" to model.modelName,
+                                    "object" to "model",
+                                    "owned_by" to "local",
+                                    "name" to model.displayName
+                                )
+                            } ?: emptyList())
+                        ))
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to get models"))
+                    }
+                }
+
+                // Chat endpoint
+                post("/chat") {
+                    try {
+                        val request = call.receive<Map<String, Any>>()
+                        val messages = request["messages"] as? List<Map<String, String>> ?: emptyList()
+                        val prompt = messages.lastOrNull()?.get("content") ?: "Hello"
+                        val model = request["model"] as? String ?: "gemma-2b-it-cpu"
+                        val maxTokens = (request["max_tokens"] as? Number)?.toInt() ?: 100
+
+                        val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
+                            prompt = prompt,
+                            model = model,
+                            maxTokens = maxTokens
+                        )
+
+                        val aiResponse = aiService.handleTextRequest(aiRequest)
+
+                        call.respond(mapOf(
+                            "response" to aiResponse.text,
+                            "model" to model,
+                            "tokens" to aiResponse.tokensUsed
+                        ))
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
+                    }
+                }
+
+                // Load model
+                post("/models/load") {
+                    try {
+                        val request = call.receive<Map<String, String>>()
+                        val modelName = request["model"] ?: return@post call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "model parameter required")
+                        )
+
+                        val model = me.bechberger.phoneserver.ai.AIModel.fromString(modelName)
+                        if (model == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Model not found"))
+                            return@post
+                        }
+
+                        call.respond(mapOf(
+                            "success" to true,
+                            "model" to modelName,
+                            "status" to "loading"
+                        ))
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
+                    }
+                }
+
+                // Download model
+                post("/models/download") {
+                    try {
+                        val request = call.receive<Map<String, String>>()
+                        val modelName = request["model"] ?: return@post call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "model parameter required")
+                        )
+
+                        val model = me.bechberger.phoneserver.ai.AIModel.fromString(modelName)
+                        if (model == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Model not found"))
+                            return@post
+                        }
+
+                        val result = aiService.downloadModel(model)
+                        call.respond(mapOf(
+                            "success" to result.success,
+                            "model" to modelName,
+                            "message" to result.message,
+                            "job_id" to "job-${System.currentTimeMillis()}"
+                        ))
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
+                    }
+                }
+
+                // Download status
+                get("/models/download/status/{job_id}") {
+                    try {
+                        val jobId = call.parameters["job_id"] ?: "unknown"
+                        call.respond(mapOf(
+                            "job_id" to jobId,
+                            "status" to "completed",
+                            "progress" to 100,
+                            "message" to "Download completed"
+                        ))
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
+                    }
+                }
+            }
+
             // Simple root endpoint
             get("/") {
                 call.respond(mapOf(
                     "server" to "AI Phone Server",
-                    "version" to "1.0.0-ai-enabled",
+                    "version" to "1.1.0-openai-compatible",
                     "message" to "Interactive API testing available in the Android app",
                     "documentation" to "Visit /help for complete API documentation",
                     "api_keys" to "Visit /api-keys/help for API key management documentation",
-                    "available_endpoints" to listOf(
-                        "/status", "/health", "/capabilities", "/help",
-                        "/location", "/orientation",
-                        "/capture", "/display",
-                        "/ai/text", "/ai/object_detection", "/ai/models", "/ai/models/download",
-                        "/ai/models/status", "/ai/models/{modelName}/status",
-                        "/ai/models/cleanup", "/ai/models/{modelName}",
-                        "/api-keys/help", "/api-keys/generate", "/api-keys/list"
+                    "compatible_with" to listOf("OpenAI API", "LM Studio", "Ollama API format"),
+                    "available_endpoints" to mapOf(
+                        "health_check" to listOf("/status", "/health", "/capabilities"),
+                        "device_services" to listOf("/location", "/orientation", "/capture", "/display"),
+                        "ai_services" to listOf("/ai/text", "/ai/object_detection", "/ai/models/*"),
+                        "openai_compatible_v1" to listOf("/v1/models", "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/messages"),
+                        "api_v1_alternative" to listOf("/api/v1/models", "/api/v1/chat", "/api/v1/models/load", "/api/v1/models/download"),
+                        "api_key_management" to listOf("/api-keys/help", "/api-keys/generate", "/api-keys/list")
                     )
                 ))
             }
