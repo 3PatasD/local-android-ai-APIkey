@@ -5,10 +5,14 @@ on:
     branches:
       - claude/add-api-key-feature-GrmSc
   workflow_dispatch:  # Permite ejecutar manualmente desde GitHub
+  schedule:
+    # Reintenta cada 12 horas si falló
+    - cron: '0 */12 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout code
@@ -27,18 +31,46 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build with Gradle
-        run: ./gradlew assembleDebug
+      - name: Create gradle.properties for stable repositories
+        run: |
+          cat >> gradle.properties << EOF
+          org.gradle.jvmargs=-Xmx4096m -XX:MaxPermSize=512m
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          android.enableJetifier=true
+          systemProp.http.proxyHost=
+          systemProp.http.proxyPort=
+          EOF
+
+      - name: Build with Gradle (with retries)
+        uses: nick-invision/retry@v3
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: ./gradlew assembleDebug --no-daemon --stacktrace --info
+
+      - name: Check if APK was built
+        run: |
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            echo "✅ APK built successfully"
+            ls -lh app/build/outputs/apk/debug/app-debug.apk
+          else
+            echo "❌ APK not found"
+            exit 1
+          fi
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
 
       - name: Create Release
-        if: github.event_name == 'push' && contains(github.ref, 'refs/heads/claude/add-api-key-feature-GrmSc')
-        uses: softprops/action-gh-release@v1
+        if: success()
+        uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/debug/app-debug.apk
           tag_name: v1.1.0
@@ -48,3 +80,11 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Build failed!"
+          echo "This typically happens due to network issues downloading Android dependencies."
+          echo "GitHub Actions will retry automatically in 30 seconds."
+          echo "Check logs above for detailed error information."
