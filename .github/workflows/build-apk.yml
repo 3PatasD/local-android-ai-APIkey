@@ -34,9 +34,10 @@ jobs:
       - name: Create gradle.properties for stable repositories
         run: |
           cat >> gradle.properties << EOF
-          org.gradle.jvmargs=-Xmx4096m -XX:MaxPermSize=512m
+          org.gradle.jvmargs=-Xmx4096m -XX:MetaspaceSize=256m -XX:MaxMetaspaceSize=512m
           org.gradle.parallel=true
           org.gradle.caching=true
+          org.gradle.workers.max=4
           android.useAndroidX=true
           android.enableJetifier=true
           systemProp.http.proxyHost=
