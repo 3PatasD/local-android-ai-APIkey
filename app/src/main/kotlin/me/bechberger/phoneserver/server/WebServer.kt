@@ -44,6 +44,7 @@ class WebServer(private val context: Context) {
     private val permissionManager = AppPermissionManager.getInstance()
     private val aiService = AIService(context)
     private val objectDetectionService = me.bechberger.phoneserver.ai.ObjectDetectionService(context)
+    private val apiKeyManager = me.bechberger.phoneserver.security.APIKeyManager(context)
 
     suspend fun start(port: Int) {
         withContext(Dispatchers.IO) {
@@ -71,6 +72,28 @@ class WebServer(private val context: Context) {
     }
 
     private fun Application.configureServer() {
+        // API Key authentication middleware
+        intercept(ApplicationCallPipeline.Features) {
+            val uri = call.request.uri
+
+            // Skip authentication for public endpoints and help
+            val publicEndpoints = listOf("/", "/help", "/status", "/health", "/capabilities", "/api-keys/help")
+            val isPublic = publicEndpoints.any { uri.startsWith(it) }
+
+            if (!isPublic) {
+                val authRequirement = me.bechberger.phoneserver.security.APIKeyInterceptor.getAuthRequirement(uri)
+
+                // For required auth endpoints, validate the key
+                if (authRequirement == me.bechberger.phoneserver.security.AuthRequirement.REQUIRED) {
+                    if (!me.bechberger.phoneserver.security.APIKeyInterceptor.validateApiKey(call, apiKeyManager)) {
+                        return@intercept
+                    }
+                }
+            }
+
+            proceed()
+        }
+
         // Request logging middleware - automatically logs all incoming requests except /ai/text
         intercept(ApplicationCallPipeline.Monitoring) {
             val startTime = System.currentTimeMillis()
@@ -78,18 +101,18 @@ class WebServer(private val context: Context) {
             val method = call.request.httpMethod.value
             val clientIp = call.request.local.remoteHost
             val userAgent = call.request.headers["User-Agent"]
-            
+
             // Skip automatic logging for /ai/text - it handles its own logging
             val skipAutoLogging = uri == "/ai/text" && method == "POST"
-            
+
             try {
                 proceed()
-                
+
                 if (!skipAutoLogging) {
                     // Log successful response for non-AI-text endpoints
                     val responseTime = System.currentTimeMillis() - startTime
                     val statusCode = call.response.status()?.value ?: 200
-                    
+
                     RequestLogger.logRequest(
                         method = method,
                         path = uri,
@@ -101,13 +124,13 @@ class WebServer(private val context: Context) {
                         responseType = "auto"
                     )
                 }
-                
+
             } catch (e: Exception) {
                 if (!skipAutoLogging) {
                     // Log error response for non-AI-text endpoints
                     val responseTime = System.currentTimeMillis() - startTime
                     val statusCode = call.response.status()?.value ?: 500
-                    
+
                     RequestLogger.logRequest(
                         method = method,
                         path = uri,
@@ -119,7 +142,7 @@ class WebServer(private val context: Context) {
                         responseType = "error"
                     )
                 }
-                
+
                 throw e
             }
         }
@@ -1549,7 +1572,14 @@ class WebServer(private val context: Context) {
                         "503 Service Unavailable" to "Service temporarily unavailable (e.g., GPS not ready)"
                     ),
                     
-                    "authentication" to "No authentication required - permission-based access control",
+                    "authentication" to mapOf(
+                        "type" to "API Key based",
+                        "required_for" to "AI services, model downloads, and sensitive operations",
+                        "optional_for" to "Location, camera, orientation, display, and public status endpoints",
+                        "header_format" to "Authorization: Bearer <API_KEY>",
+                        "management" to "Visit /api-keys/help for key management documentation",
+                        "generate_key" to "POST /api-keys/generate"
+                    ),
                     
                     "content_types" to mapOf(
                         "request" to "application/json",
@@ -1567,6 +1597,357 @@ class WebServer(private val context: Context) {
                 ))
             }
             
+            // API Key management endpoints
+            route("/api-keys") {
+                // API Key documentation
+                get("/help") {
+                    call.respond(mapOf(
+                        "title" to "API Key Management Documentation",
+                        "description" to "API keys are required to access protected endpoints (AI services, model downloads, etc.)",
+                        "authentication" to mapOf(
+                            "format" to "Include in Authorization header as: Authorization: Bearer <API_KEY>",
+                            "alternative" to "Authorization: <API_KEY>"
+                        ),
+                        "endpoints" to mapOf(
+                            "POST /api-keys/generate" to mapOf(
+                                "description" to "Generate a new API key",
+                                "authentication" to "None",
+                                "request_body" to mapOf(
+                                    "name" to "Optional: Human-readable name for the key (default: 'API Key')"
+                                ),
+                                "response" to mapOf(
+                                    "id" to "Unique identifier for the key",
+                                    "key" to "The actual API key (save this securely!)",
+                                    "name" to "Name assigned to the key",
+                                    "createdAt" to "Timestamp when key was created",
+                                    "isActive" to true
+                                ),
+                                "sample_request" to "POST /api-keys/generate\n{\n  \"name\": \"Mobile App Key\"\n}"
+                            ),
+                            "GET /api-keys/list" to mapOf(
+                                "description" to "List all API keys (active and revoked)",
+                                "authentication" to "None",
+                                "response" to mapOf(
+                                    "keys" to "Array of API key objects"
+                                ),
+                                "sample_request" to "GET /api-keys/list"
+                            ),
+                            "GET /api-keys/{id}" to mapOf(
+                                "description" to "Get details of a specific API key",
+                                "authentication" to "None",
+                                "parameters" to mapOf(
+                                    "id" to "Key ID"
+                                ),
+                                "sample_request" to "GET /api-keys/12345"
+                            ),
+                            "POST /api-keys/{id}/revoke" to mapOf(
+                                "description" to "Revoke (disable) an API key without deleting it",
+                                "authentication" to "None",
+                                "parameters" to mapOf(
+                                    "id" to "Key ID to revoke"
+                                ),
+                                "sample_request" to "POST /api-keys/12345/revoke"
+                            ),
+                            "DELETE /api-keys/{id}" to mapOf(
+                                "description" to "Permanently delete an API key",
+                                "authentication" to "None",
+                                "parameters" to mapOf(
+                                    "id" to "Key ID to delete"
+                                ),
+                                "sample_request" to "DELETE /api-keys/12345"
+                            ),
+                            "PUT /api-keys/{id}" to mapOf(
+                                "description" to "Update API key name",
+                                "authentication" to "None",
+                                "request_body" to mapOf(
+                                    "name" to "New name for the key"
+                                ),
+                                "sample_request" to "PUT /api-keys/12345\n{\n  \"name\": \"New Name\"\n}"
+                            ),
+                            "GET /api-keys/stats" to mapOf(
+                                "description" to "Get API key usage statistics",
+                                "authentication" to "None",
+                                "response" to mapOf(
+                                    "totalKeys" to 5,
+                                    "activeKeys" to 3,
+                                    "revokedKeys" to 2,
+                                    "recentlyUsedKeys" to "Array of recently used keys"
+                                ),
+                                "sample_request" to "GET /api-keys/stats"
+                            )
+                        ),
+                        "security_notes" to listOf(
+                            "API keys should be kept secure and not shared",
+                            "Store keys in environment variables or secure storage",
+                            "Regularly rotate old keys and revoke unused ones",
+                            "Consider revoking a key if it's been compromised",
+                            "Protected endpoints require valid API keys for access"
+                        ),
+                        "example_usage" to mapOf(
+                            "curl" to "curl -H 'Authorization: Bearer sk_XXXXX' http://localhost:8005/ai/text"
+                        )
+                    ))
+                }
+
+                // Generate new API key
+                post("/generate") {
+                    try {
+                        val requestBody = try {
+                            call.receiveNullable<Map<String, String>>()
+                        } catch (e: Exception) {
+                            null
+                        }
+
+                        val keyName = requestBody?.get("name") ?: "API Key"
+                        val newKey = apiKeyManager.generateNewKey(keyName)
+
+                        call.respond(mapOf(
+                            "success" to true,
+                            "message" to "API key generated successfully",
+                            "id" to newKey.id,
+                            "key" to newKey.key,
+                            "name" to newKey.name,
+                            "createdAt" to newKey.createdAt,
+                            "isActive" to newKey.isActive,
+                            "warning" to "Save the key securely - you won't be able to see it again!"
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error generating API key")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "error" to "Failed to generate API key",
+                                "code" to "GENERATION_ERROR",
+                                "details" to e.message
+                            )
+                        )
+                    }
+                }
+
+                // List all API keys
+                get("/list") {
+                    try {
+                        val keys = apiKeyManager.getAllKeys().map { key ->
+                            mapOf(
+                                "id" to key.id,
+                                "name" to key.name,
+                                "createdAt" to key.createdAt,
+                                "lastUsedAt" to key.lastUsedAt,
+                                "isActive" to key.isActive,
+                                "keyPreview" to "${key.key.take(7)}...${key.key.takeLast(4)}"
+                            )
+                        }
+
+                        call.respond(mapOf(
+                            "success" to true,
+                            "totalKeys" to keys.size,
+                            "activeKeys" to keys.count { it["isActive"] == true },
+                            "keys" to keys
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error listing API keys")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "error" to "Failed to list API keys",
+                                "code" to "LIST_ERROR",
+                                "details" to e.message
+                            )
+                        )
+                    }
+                }
+
+                // Get specific API key details
+                get("/{id}") {
+                    try {
+                        val keyId = call.parameters["id"] ?: return@get call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "Key ID required")
+                        )
+
+                        val key = apiKeyManager.getKey(keyId)
+                        if (key != null) {
+                            call.respond(mapOf(
+                                "success" to true,
+                                "id" to key.id,
+                                "name" to key.name,
+                                "createdAt" to key.createdAt,
+                                "lastUsedAt" to key.lastUsedAt,
+                                "isActive" to key.isActive,
+                                "keyPreview" to "${key.key.take(7)}...${key.key.takeLast(4)}"
+                            ))
+                        } else {
+                            call.respond(
+                                HttpStatusCode.NotFound,
+                                mapOf(
+                                    "error" to "API key not found",
+                                    "code" to "KEY_NOT_FOUND",
+                                    "id" to keyId
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error getting API key")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "error" to "Failed to get API key",
+                                "code" to "GET_ERROR",
+                                "details" to e.message
+                            )
+                        )
+                    }
+                }
+
+                // Revoke API key
+                post("/{id}/revoke") {
+                    try {
+                        val keyId = call.parameters["id"] ?: return@post call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "Key ID required")
+                        )
+
+                        if (apiKeyManager.revokeKey(keyId)) {
+                            call.respond(mapOf(
+                                "success" to true,
+                                "message" to "API key revoked successfully",
+                                "id" to keyId
+                            ))
+                        } else {
+                            call.respond(
+                                HttpStatusCode.NotFound,
+                                mapOf(
+                                    "error" to "API key not found",
+                                    "code" to "KEY_NOT_FOUND",
+                                    "id" to keyId
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error revoking API key")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "error" to "Failed to revoke API key",
+                                "code" to "REVOKE_ERROR",
+                                "details" to e.message
+                            )
+                        )
+                    }
+                }
+
+                // Delete API key
+                delete("/{id}") {
+                    try {
+                        val keyId = call.parameters["id"] ?: return@delete call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "Key ID required")
+                        )
+
+                        if (apiKeyManager.deleteKey(keyId)) {
+                            call.respond(mapOf(
+                                "success" to true,
+                                "message" to "API key deleted successfully",
+                                "id" to keyId
+                            ))
+                        } else {
+                            call.respond(
+                                HttpStatusCode.NotFound,
+                                mapOf(
+                                    "error" to "API key not found",
+                                    "code" to "KEY_NOT_FOUND",
+                                    "id" to keyId
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error deleting API key")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "error" to "Failed to delete API key",
+                                "code" to "DELETE_ERROR",
+                                "details" to e.message
+                            )
+                        )
+                    }
+                }
+
+                // Update API key name
+                put("/{id}") {
+                    try {
+                        val keyId = call.parameters["id"] ?: return@put call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "Key ID required")
+                        )
+
+                        val requestBody = try {
+                            call.receive<Map<String, String>>()
+                        } catch (e: Exception) {
+                            return@put call.respond(
+                                HttpStatusCode.BadRequest,
+                                mapOf("error" to "Invalid request body")
+                            )
+                        }
+
+                        val newName = requestBody["name"] ?: return@put call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "New name required")
+                        )
+
+                        if (apiKeyManager.updateKeyName(keyId, newName)) {
+                            call.respond(mapOf(
+                                "success" to true,
+                                "message" to "API key name updated successfully",
+                                "id" to keyId,
+                                "name" to newName
+                            ))
+                        } else {
+                            call.respond(
+                                HttpStatusCode.NotFound,
+                                mapOf(
+                                    "error" to "API key not found",
+                                    "code" to "KEY_NOT_FOUND",
+                                    "id" to keyId
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error updating API key")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "error" to "Failed to update API key",
+                                "code" to "UPDATE_ERROR",
+                                "details" to e.message
+                            )
+                        )
+                    }
+                }
+
+                // Get API key statistics
+                get("/stats") {
+                    try {
+                        val stats = apiKeyManager.getKeyStats()
+                        call.respond(mapOf(
+                            "success" to true,
+                            "statistics" to stats,
+                            "timestamp" to System.currentTimeMillis()
+                        ))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error getting API key stats")
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "error" to "Failed to get API key statistics",
+                                "code" to "STATS_ERROR",
+                                "details" to e.message
+                            )
+                        )
+                    }
+                }
+            }
+
             // Simple root endpoint
             get("/") {
                 call.respond(mapOf(
@@ -1574,13 +1955,15 @@ class WebServer(private val context: Context) {
                     "version" to "1.0.0-ai-enabled",
                     "message" to "Interactive API testing available in the Android app",
                     "documentation" to "Visit /help for complete API documentation",
+                    "api_keys" to "Visit /api-keys/help for API key management documentation",
                     "available_endpoints" to listOf(
                         "/status", "/health", "/capabilities", "/help",
-                        "/location", "/orientation", 
+                        "/location", "/orientation",
                         "/capture", "/display",
-                        "/ai/text", "/ai/object_detection", "/ai/models", "/ai/models/download", 
+                        "/ai/text", "/ai/object_detection", "/ai/models", "/ai/models/download",
                         "/ai/models/status", "/ai/models/{modelName}/status",
-                        "/ai/models/cleanup", "/ai/models/{modelName}"
+                        "/ai/models/cleanup", "/ai/models/{modelName}",
+                        "/api-keys/help", "/api-keys/generate", "/api-keys/list"
                     )
                 ))
             }
