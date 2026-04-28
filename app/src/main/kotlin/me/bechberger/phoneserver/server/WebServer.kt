@@ -1958,11 +1958,11 @@ class WebServer(private val context: Context) {
                             "object" to "list",
                             "data" to (models.models?.map { model ->
                                 mapOf(
-                                    "id" to model.modelName,
+                                    "id" to model.name,
                                     "object" to "model",
                                     "owned_by" to "local",
                                     "permission" to listOf<String>(),
-                                    "root" to model.modelName,
+                                    "root" to model.name,
                                     "parent" to null
                                 )
                             } ?: emptyList())
@@ -1986,7 +1986,7 @@ class WebServer(private val context: Context) {
                         val model = request["model"] as? String ?: "gemma-2b-it-cpu"
 
                         val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
-                            prompt = prompt,
+                            text = prompt,
                             model = model,
                             maxTokens = maxTokens,
                             temperature = (request["temperature"] as? Number)?.toFloat() ?: 0.7f
@@ -2003,14 +2003,14 @@ class WebServer(private val context: Context) {
                                 "index" to 0,
                                 "message" to mapOf(
                                     "role" to "assistant",
-                                    "content" to aiResponse.text
+                                    "content" to aiResponse.response
                                 ),
                                 "finish_reason" to "stop"
                             )),
                             "usage" to mapOf(
                                 "prompt_tokens" to 0,
-                                "completion_tokens" to aiResponse.tokensUsed,
-                                "total_tokens" to aiResponse.tokensUsed
+                                "completion_tokens" to aiResponse.metadata.tokenCount,
+                                "total_tokens" to aiResponse.metadata.tokenCount
                             )
                         ))
                     } catch (e: Exception) {
@@ -2034,7 +2034,7 @@ class WebServer(private val context: Context) {
                         val model = request["model"] as? String ?: "gemma-2b-it-cpu"
 
                         val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
-                            prompt = prompt,
+                            text = prompt,
                             model = model,
                             maxTokens = maxTokens,
                             temperature = (request["temperature"] as? Number)?.toFloat() ?: 0.7f
@@ -2048,15 +2048,15 @@ class WebServer(private val context: Context) {
                             "created" to System.currentTimeMillis() / 1000,
                             "model" to model,
                             "choices" to listOf(mapOf(
-                                "text" to aiResponse.text,
+                                "text" to aiResponse.response,
                                 "index" to 0,
                                 "logprobs" to null,
                                 "finish_reason" to "stop"
                             )),
                             "usage" to mapOf(
                                 "prompt_tokens" to 0,
-                                "completion_tokens" to aiResponse.tokensUsed,
-                                "total_tokens" to aiResponse.tokensUsed
+                                "completion_tokens" to aiResponse.metadata.tokenCount,
+                                "total_tokens" to aiResponse.metadata.tokenCount
                             )
                         ))
                     } catch (e: Exception) {
@@ -2109,7 +2109,7 @@ class WebServer(private val context: Context) {
                         val model = request["model"] as? String ?: "gemma-2b-it-cpu"
 
                         val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
-                            prompt = prompt,
+                            text = prompt,
                             model = model,
                             maxTokens = maxTokens
                         )
@@ -2120,12 +2120,12 @@ class WebServer(private val context: Context) {
                             "id" to "msg-${System.currentTimeMillis()}",
                             "type" to "message",
                             "role" to "assistant",
-                            "content" to aiResponse.text,
+                            "content" to aiResponse.response,
                             "model" to model,
                             "stop_reason" to "end_turn",
                             "usage" to mapOf(
                                 "input_tokens" to 0,
-                                "output_tokens" to aiResponse.tokensUsed
+                                "output_tokens" to aiResponse.metadata.tokenCount
                             )
                         ))
                     } catch (e: Exception) {
@@ -2145,15 +2145,15 @@ class WebServer(private val context: Context) {
                         val maxTokens = (request["max_tokens"] as? Number)?.toInt() ?: 100
 
                         val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
-                            prompt = prompt,
+                            text = prompt,
                             maxTokens = maxTokens
                         )
 
                         val aiResponse = aiService.handleTextRequest(aiRequest)
 
                         call.respond(mapOf(
-                            "response" to aiResponse.text,
-                            "tokens_used" to aiResponse.tokensUsed,
+                            "response" to aiResponse.response,
+                            "tokens_used" to aiResponse.metadata.tokenCount,
                             "model" to aiResponse.model
                         ))
                     } catch (e: Exception) {
@@ -2172,7 +2172,7 @@ class WebServer(private val context: Context) {
                             "object" to "list",
                             "data" to (models.models?.map { model ->
                                 mapOf(
-                                    "id" to model.modelName,
+                                    "id" to model.name,
                                     "object" to "model",
                                     "owned_by" to "local",
                                     "name" to model.displayName
@@ -2194,7 +2194,7 @@ class WebServer(private val context: Context) {
                         val maxTokens = (request["max_tokens"] as? Number)?.toInt() ?: 100
 
                         val aiRequest = me.bechberger.phoneserver.ai.AITextRequest(
-                            prompt = prompt,
+                            text = prompt,
                             model = model,
                             maxTokens = maxTokens
                         )
@@ -2202,9 +2202,9 @@ class WebServer(private val context: Context) {
                         val aiResponse = aiService.handleTextRequest(aiRequest)
 
                         call.respond(mapOf(
-                            "response" to aiResponse.text,
+                            "response" to aiResponse.response,
                             "model" to model,
-                            "tokens" to aiResponse.tokensUsed
+                            "tokens" to aiResponse.metadata.tokenCount
                         ))
                     } catch (e: Exception) {
                         call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
